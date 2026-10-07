@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AndroidGuard — Android Privacy Compliance & FlowDroid Taint Analyzer</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="app-container">
+        <!-- HEADER -->
+        <header class="header">
+            <div class="header-left">
+                <div class="logo-badge">
+                    <span class="logo-icon">🛡️</span>
+                    <div>
+                        <h1>AndroidGuard</h1>
+                        <p class="subtitle">Android Privacy Compliance & FlowDroid Taint Analysis</p>
+                    </div>
+                </div>
+            </div>
+            <div class="header-right">
+                <div class="config-status-tag" id="configToggleBtn" title="Click to view environment configuration">
+                    <span class="status-indicator-dot {{ 'dot-green' if config.jar_exists and config.platforms_exists and config.sources_sinks_exists else 'dot-yellow' }}"></span>
+                    <span>System Ready</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- CONFIG MODAL / DRAWER -->
+        <div id="configInfoCard" class="config-drawer hidden">
+            <div class="config-drawer-content">
+                <div class="config-item">
+                    <span class="config-label">FlowDroid JAR:</span>
+                    <span class="config-val" title="{{ config.flowdroid_jar }}">{{ config.flowdroid_jar }}</span>
+                    <span class="badge-mini {{ 'badge-success' if config.jar_exists else 'badge-danger' }}">{{ 'Found' if config.jar_exists else 'Missing' }}</span>
+                </div>
+                <div class="config-item">
+                    <span class="config-label">Platforms Dir:</span>
+                    <span class="config-val" title="{{ config.platforms_dir }}">{{ config.platforms_dir }}</span>
+                    <span class="badge-mini {{ 'badge-success' if config.platforms_exists else 'badge-danger' }}">{{ 'Found' if config.platforms_exists else 'Missing' }}</span>
+                </div>
+                <div class="config-item">
+                    <span class="config-label">Sources/Sinks:</span>
+                    <span class="config-val" title="{{ config.sources_sinks_file }}">{{ config.sources_sinks_file }}</span>
+                    <span class="badge-mini {{ 'badge-success' if config.sources_sinks_exists else 'badge-danger' }}">{{ 'Found' if config.sources_sinks_exists else 'Missing' }}</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- TOP MODULE SELECTOR NAVIGATION -->
+        <nav class="module-selector-container">
+            <div class="module-selector-title-row">
+                <h3><span>⚙️</span> Choose Analysis Workflow</h3>
+                <span class="info-pill" id="activeModuleIndicator">Active: Data Safety Extractor</span>
+            </div>
+            <div class="module-tabs-grid">
+                <!-- Tab 1: Play Store Data Safety Extractor -->
+                <div class="module-tab-card tab-dss active" data-module="dss" id="tabDss" role="button" tabindex="0">
+                    <div class="module-tab-top">
+                        <span class="module-tab-icon">🛡️</span>
+                        <span class="module-tab-badge badge-tab-green">Fast • Instant</span>
+                    </div>
+                    <h4>1. Play Store Data Safety</h4>
+                    <p>Extracts package name & queries official Google Play declarations, encryption status, and data collection lists.</p>
+                    <div class="module-active-pill">● Active Interface</div>
+                </div>
+
+                <!-- Tab 2: FlowDroid Static Analysis -->
+                <div class="module-tab-card tab-flowdroid" data-module="flowdroid" id="tabFlowdroid" role="button" tabindex="0">
+                    <div class="module-tab-top">
+                        <span class="module-tab-icon">🔬</span>
+                        <span class="module-tab-badge badge-tab-blue">Static Bytecode</span>
+                    </div>
+                    <h4>2. FlowDroid Taint Analysis</h4>
+                    <p>Performs interprocedural static data-flow analysis on Dalvik bytecode to detect information leaks between sources and sinks.</p>
+                    <div class="module-active-pill">○ Click to switch</div>
+                </div>
+            </div>
+        </nav>
+
+        <main class="main-content">
+            <!-- ============================================================= -->
+            <!-- VIEW 1: GOOGLE PLAY DATA SAFETY EXTRACTOR                     -->
+            <!-- ============================================================= -->
+            <div id="viewDss" class="module-view active">
+                <section class="card run-setup-card">
+                    <div class="card-header">
+                        <h2>🛡️ Google Play Data Safety Section Extractor</h2>
+                        <span class="info-pill pill-green">Play Store Verified</span>
+                    </div>
+                    <div class="view-intro-text">
+                        Select or drop any compiled Android application (.apk). AndroidGuard will automatically extract its package name and query the Google Play Store for its official Data Safety declarations.
+                    </div>
+
+                    <form id="dssForm" class="run-form" enctype="multipart/form-data" onsubmit="return false;">
+                        <div class="form-grid-single">
+                            <div class="file-picker-wrapper">
+                                <label class="form-label">Select Android APK</label>
+                                <div class="dropzone dropzone-sync" id="dssDropzone">
+                                    <input type="file" id="dssFileInput" accept=".apk" class="file-input-hidden">
+                                    <div class="dropzone-content prompt-sync">
+                                        <div class="upload-icon">📦</div>
+                                        <div class="upload-text"><strong>Click to browse</strong> or drag & drop .apk here</div>
+                                        <span class="upload-hint">Fast inspection • No Java compilation or bytecode analysis needed</span>
+                                    </div>
+                                    <div class="file-details hidden details-sync">
+                                        <div class="file-icon">📱</div>
+                                        <div class="file-meta">
+                                            <div class="file-name file-name-sync">app.apk</div>
+                                            <div class="file-size file-size-sync">0.00 MB</div>
+                                        </div>
+                                        <button type="button" class="btn-clear btn-clear-file" title="Change file">✕</button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="action-btn-container" style="margin-top: 18px;">
+                                <div class="action-btn-group">
+                                    <button type="button" id="btnDssExtractAction" class="btn btn-primary" disabled>
+                                        <span class="btn-icon">🛡️</span>
+                                        <span class="btn-text">Extract Play Store Data Safety</span>
+                                    </button>
+                                </div>
+                                <div id="dssLoadingNotice" class="running-notice hidden">
+                                    <div class="spinner-small"></div>
+                                    <span>Querying Google Play Store...</span>
+                                </div>
+                            </div>
+                        </div>
+                    </form>
+                </section>
+
+                <!-- Dedicated Full-Width Security Card for View 1 -->
+                <section class="card dss-view-card hidden" id="dssStandaloneCard">
+                    <div class="security-card dss-card">
+                        <div class="security-card-header">
+                            <div class="security-card-title-wrap">
+                                <span class="sec-card-badge">📋 Google Play Data Safety</span>
+                                <h3>Official Privacy & Security Declarations</h3>
+                            </div>
+                            <span class="dss-status-badge" id="v1DssStatusBadge">Play Store Declared</span>
+                        </div>
+
+                        <!-- App Header -->
+                        <div class="dss-app-header">
+                            <div class="dss-icon-container">
+                                <img id="v1DssAppIcon" class="dss-app-icon" src="" alt="App Icon">
+                            </div>
+                            <div class="dss-meta">
+                                <h4 class="dss-app-title" id="v1DssAppName">Loading App Info...</h4>
+                                <div class="dss-developer" id="v1DssAppDeveloper">Developer: Unknown</div>
+                                <div class="dss-package-row">
+                                    <span class="dss-package-tag" id="v1DssPackageName">com.example</span>
+                                    <a id="v1DssPrivacyLink" href="#" target="_blank" rel="noopener noreferrer" class="dss-policy-btn">
+                                        <span>🔗</span> Official Privacy Policy
+                                    </a>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Badges Row -->
+                        <div class="dss-badges-row">
+                            <div class="security-badge badge-green-shield" id="v1BadgeEncryption">
+                                <span class="badge-icon" id="v1IconEncryption">🛡️</span>
+                                <div>
+                                    <strong class="badge-title">Data Encryption</strong>
+                                    <span class="badge-subtitle" id="v1TextEncryption">Yes, in transit</span>
+                                </div>
+                            </div>
+                            <div class="security-badge" id="v1BadgeDeletion">
+                                <span class="badge-icon" id="v1IconDeletion">🗑️</span>
+                                <div>
+                                    <strong class="badge-title">Data Deletion</strong>
+                                    <span class="badge-subtitle" id="v1TextDeletion">Request supported</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Two-Column Layout for Data Lists -->
+                        <div class="dss-two-col">
+                            <!-- Card A: Data Collected -->
+                            <div class="dss-subcard">
+                                <div class="dss-subcard-header">
+                                    <span class="subcard-icon">📥</span>
+                                    <h5>Data This App Collects</h5>
+                                </div>
+                                <ul class="dss-bullet-list" id="v1DssCollectedList">
+                                    <li>No Data Collection Declared</li>
+                                </ul>
+                            </div>
+
+                            <!-- Card B: Data Shared -->
+                            <div class="dss-subcard">
+                                <div class="dss-subcard-header">
+                                    <span class="subcard-icon">↗️</span>
+                                    <h5>Data Shared with Others</h5>
+                                </div>
+                                <ul class="dss-bullet-list" id="v1DssSharedList">
+                                    <li>No Third-Party Sharing Declared</li>
+                                </ul>
+                            </div>
+                        </div>
+
+                        <!-- Fallback notice when unlisted or benchmark APK -->
+                        <div class="dss-unlisted-notice hidden" id="v1DssUnlistedNotice">
+                            <div class="unlisted-icon">ℹ️</div>
+                            <div>
+                                <strong>Package Not Listed on Google Play Store</strong>
+                                <p id="v1DssUnlistedText">This APK appears to be a local test build, benchmark app, or unlisted package. No Play Store Data Safety declarations could be retrieved.</p>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+            </div>
+
+            <!-- ============================================================= -->
+            <!-- VIEW 2: FLOWDROID STATIC TAINT ANALYSIS                       -->
+            <!-- ============================================================= -->
+            <div id="viewFlowdroid" class="module-view hidden">
+                <section class="card run-setup-card">
+                    <div class="card-header">
+                        <h2>🔬 FlowDroid Static Taint Analysis</h2>
+                        <span class="info-pill">Bytecode Analysis • Single Run</span>
+                    </div>
+
+                    <form id="fdRunForm" class="run-form" enctype="multipart/form-data">
+                        <div class="form-grid">
+                            <div class="file-picker-wrapper">
+                                <label class="form-label">Select Android APK</label>
+                                <div class="dropzone dropzone-sync" id="fdDropzone">
+                                    <input type="file" id="fdFileInput" accept=".apk" class="file-input-hidden">
+                                    <div class="dropzone-content prompt-sync">
+                                        <div class="upload-icon">📦</div>
+                                        <div class="upload-text"><strong>Click to browse</strong> or drag & drop .apk here</div>
+                                        <span class="upload-hint">Supports compiled Android application packages (.apk)</span>
+                                    </div>
+                                    <div class="file-details hidden details-sync">
+                                        <div class="file-icon">📱</div>
+                                        <div class="file-meta">
+                                            <div class="file-name file-name-sync">app.apk</div>
+                                            <div class="file-size file-size-sync">0.00 MB</div>
+                                        </div>
+                                        <button type="button" class="btn-clear btn-clear-file" title="Change file">✕</button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="settings-action-wrapper">
+                                <div class="form-group">
+                                    <label class="form-label" for="fdTimeoutInput">Timeout (seconds)</label>
+                                    <div class="input-with-suffix">
+                                        <input type="number" id="fdTimeoutInput" value="{{ config.default_timeout }}" min="5" max="7200" required>
+                                        <span class="input-suffix">sec</span>
+                                    </div>
+                                    <span class="form-subtext">Default 1800s (30 min). Subprocess tree is killed cleanly upon timeout.</span>
+                                </div>
+
+                                <div class="action-btn-container">
+                                    <div class="action-btn-group">
+                                        <button type="submit" id="btnRunFlowdroidAction" class="btn btn-primary" disabled>
+                                            <span class="btn-icon">▶</span>
+                                            <span class="btn-text">Run FlowDroid Analysis</span>
+                                        </button>
+                                    </div>
+                                    <div id="fdRunStateNotice" class="running-notice hidden">
+                                        <div class="spinner-small"></div>
+                                        <span>FlowDroid static analysis running in background...</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </form>
+                </section>
+
+                <!-- Live Execution Console -->
+                <section class="card monitor-card" id="fdMonitorSection">
+                    <div class="card-header monitor-header">
+                        <div class="monitor-title-group">
+                            <h2>Live Execution Console</h2>
+                            <div id="fdLiveStatusBadge" class="status-badge badge-idle">IDLE</div>
+                        </div>
+                        <div class="monitor-controls">
+                            <div class="timer-badge">
+                                <span class="timer-icon">⏱️</span>
+                                <span id="fdElapsedTime">0.0s</span>
+                            </div>
+                            <label class="autoscroll-label">
+                                <input type="checkbox" id="fdChkAutoScroll" checked> Auto-scroll
+                            </label>
+                            <button type="button" class="btn-sm btn-secondary" id="fdBtnClearLogs">Clear Log</button>
+                        </div>
+                    </div>
+
+                    <div class="console-wrapper">
+                        <div class="terminal-window" id="fdTerminalWindow">
+                            <div class="terminal-placeholder" id="fdTerminalPlaceholder">Ready for execution. Logs will stream here in real-time.</div>
+                            <pre id="fdTerminalLogs" class="terminal-logs"></pre>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- FlowDroid Results Section -->
+                <section class="card results-card hidden" id="fdResultsSection">
+                    <div class="card-header results-header">
+                        <div class="results-title-group">
+                            <h2>FlowDroid Static Analysis Results</h2>
+                            <div id="fdOutcomeBadge" class="outcome-badge">UNKNOWN</div>
+                        </div>
+                        <div class="results-actions">
+                            <a id="fdBtnDownloadXml" href="#" class="btn btn-outline disabled" download>
+                                <span>📥</span> Download Raw XML
+                            </a>
+                        </div>
+                    </div>
+
+                    <!-- Crash Debug Snippet -->
+                    <div id="fdCrashAlertBox" class="alert-box alert-danger hidden">
+                        <div class="alert-header">
+                            <strong>⚠️ Analysis Error / Process Crash</strong>
+                        </div>
+                        <p class="alert-subtext">Recent stderr / log output for debugging:</p>
+                        <pre id="fdCrashSnippetText" class="code-snippet-box"></pre>
+                    </div>
+
+                    <!-- Performance Summary Grid -->
+                    <div class="perf-grid">
+                        <div class="metric-card metric-card-highlight">
+                            <div class="metric-val" id="fdMetricTotalFindings">0</div>
+                            <div class="metric-lbl">Information Leaks Detected</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-val" id="fdMetricSourceCount">-</div>
+                            <div class="metric-lbl">Sources Identified</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-val" id="fdMetricSinkCount">-</div>
+                            <div class="metric-lbl">Sinks Identified</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-val" id="fdMetricTotalRuntime">-</div>
+                            <div class="metric-lbl">Total Runtime (s)</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-val" id="fdMetricCallgraph">-</div>
+                            <div class="metric-lbl">Callgraph (s)</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-val" id="fdMetricMaxMemory">-</div>
+                            <div class="metric-lbl">Peak Memory (MB)</div>
+                        </div>
+                    </div>
+
+                    <!-- Findings Table -->
+                    <div class="findings-section">
+                        <div class="findings-header">
+                            <h3 class="subsection-title">Reachable Data Flow Findings (Source ➔ Sink)</h3>
+                            <div class="table-search-box">
+                                <input type="text" id="fdFindingsSearchInput" placeholder="Filter findings (method, statement, etc)...">
+                            </div>
+                        </div>
+
+                        <div class="table-container">
+                            <table class="data-table" id="fdFindingsTable">
+                                <thead>
+                                    <tr>
+                                        <th style="width: 50px;">#</th>
+                                        <th>Source</th>
+                                        <th>Sink</th>
+                                        <th>Sink Method</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="fdFindingsTableBody"></tbody>
+                            </table>
+                            <div id="fdNoFindingsMessage" class="table-empty hidden">
+                                <div class="empty-icon">✓</div>
+                                <div class="empty-title">No Information Leaks Detected</div>
+                                <div class="empty-subtext">FlowDroid finished without finding reachable data flows between marked sources and sinks.</div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- History Section in View 2 -->
+                <section class="card history-card">
+                    <div class="card-header history-header">
+                        <div>
+                            <h2>Session Run History</h2>
+                            <p class="history-subtext">History of FlowDroid analyses performed in this session. Click "View" to inspect past results.</p>
+                        </div>
+                        <div class="history-actions">
+                            <button type="button" class="btn-sm btn-secondary btn-refresh-hist">↻ Refresh</button>
+                            <button type="button" class="btn-sm btn-danger btn-clear-hist">🗑 Clear History</button>
+                        </div>
+                    </div>
+
+                    <div class="table-container">
+                        <table class="data-table history-table-sync">
+                            <thead>
+                                <tr>
+                                    <th>Timestamp</th>
+                                    <th>APK Name</th>
+                                    <th>Size</th>
+                                    <th>Elapsed</th>
+                                    <th>Outcome</th>
+                                    <th>Findings</th>
+                                    <th style="text-align: right;">Action</th>
+                                </tr>
+                            </thead>
+                            <tbody class="history-tbody-sync">
+                                <tr><td colspan="7" class="text-muted text-center">No runs recorded yet in this session.</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+            </div>
+        </main>
+
+        <footer class="footer">
+            <p>AndroidGuard — Android Privacy Compliance & FlowDroid Taint Analysis</p>
+        </footer>
+    </div>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
