@@ -1,12 +1,10 @@
 import pytest
-import os
-import tempfile
 from fallback_analyzer.linker import Linker, Finding
 from fallback_analyzer.manifest import ManifestData
 
-class DummyManifestParser:
-    def get_required_permissions_for_category(self, category):
-        if category == "TELEPHONY":
+class DummyPermissionMapper:
+    def get_permissions_for_signature(self, signature):
+        if "getDeviceId" in signature:
             return ["android.permission.READ_PHONE_STATE"]
         return []
 
@@ -17,20 +15,20 @@ def test_linker_levels():
         permissions={"android.permission.READ_PHONE_STATE"},
         components={"Lcom/example/MainActivity;"}
     )
-    parser = DummyManifestParser()
-    linker = Linker(manifest_data, parser, enable_l4=True)
+    mapper = DummyPermissionMapper()
+    linker = Linker(manifest_data, mapper, enable_l4=True)
     
     # Hits
-    src_l1 = {"kind": "source", "class": "Lcom/example/A;", "method": "m1", "category": "TELEPHONY"}
+    src_l1 = {"kind": "source", "class": "Lcom/example/A;", "method": "m1", "target_signature": "Landroid/telephony/TelephonyManager;->getDeviceId()Ljava/lang/String;", "category": "TELEPHONY"}
     snk_l1 = {"kind": "sink", "class": "Lcom/example/A;", "method": "m1"}
     
-    src_l2 = {"kind": "source", "class": "Lcom/example/B;", "method": "m1", "category": "TELEPHONY"}
+    src_l2 = {"kind": "source", "class": "Lcom/example/B;", "method": "m1", "target_signature": "Landroid/telephony/TelephonyManager;->getDeviceId()Ljava/lang/String;", "category": "TELEPHONY"}
     snk_l2 = {"kind": "sink", "class": "Lcom/example/B;", "method": "m2"}
     
-    src_l3 = {"kind": "source", "class": "Lcom/example/MainActivity$1;", "method": "run", "category": "TELEPHONY"}
+    src_l3 = {"kind": "source", "class": "Lcom/example/MainActivity$1;", "method": "run", "target_signature": "Landroid/telephony/TelephonyManager;->getDeviceId()Ljava/lang/String;", "category": "TELEPHONY"}
     snk_l3 = {"kind": "sink", "class": "Lcom/example/MainActivity;", "method": "onCreate"}
     
-    src_l4 = {"kind": "source", "class": "Lcom/example/C;", "method": "m1", "category": "TELEPHONY"}
+    src_l4 = {"kind": "source", "class": "Lcom/example/C;", "method": "m1", "target_signature": "Landroid/telephony/TelephonyManager;->getDeviceId()Ljava/lang/String;", "category": "TELEPHONY"}
     snk_l4 = {"kind": "sink", "class": "Lcom/example/D;", "method": "m2"}
     
     call_edges = {

@@ -71,11 +71,11 @@ def test_scanner(smali_workspace):
     # We expect 2 hits (exact + subclass)
     assert len(hits) == 2
     
-    exact_hit = next(h for h in hits if h["method"] == "exactHit")
+    exact_hit = next(h for h in hits if "exactHit" in h["method"])
     assert exact_hit["match_type"] == "exact"
     assert exact_hit["target_signature"] == "Landroid/telephony/TelephonyManager;->getDeviceId()Ljava/lang/String;"
     
-    subclass_hit = next(h for h in hits if h["method"] == "subclassHit")
+    subclass_hit = next(h for h in hits if "subclassHit" in h["method"])
     assert subclass_hit["match_type"] == "name_descriptor"
     assert subclass_hit["target_signature"] == "Lcom/example/MyManager;->getDeviceId()Ljava/lang/String;"
     
