@@ -25,4 +25,4 @@ jobs:
         
     - name: Run Fallback Analyzer Unit Tests
       run: |
-        pytest fallback_analyzer/tests/
+        pytest fallback_analyzer/tests/ api/tests/
