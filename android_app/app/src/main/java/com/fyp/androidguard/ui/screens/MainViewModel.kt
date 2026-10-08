@@ -12,6 +12,8 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.fyp.androidguard.models.StatusResponse
+import com.fyp.androidguard.models.AnalysisReport
+import com.google.gson.Gson
 import com.fyp.androidguard.network.ApiClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -37,7 +39,7 @@ sealed class UiState {
     data class AppList(val apps: List<InstalledApp>) : UiState()
     data class Uploading(val message: String, val appName: String) : UiState()
     data class Analyzing(val stage: String, val appName: String) : UiState()
-    data class Result(val leaksFound: Int, val rawJson: String, val appName: String) : UiState()
+    data class Result(val report: AnalysisReport, val rawJson: String, val appName: String) : UiState()
     data class Error(val error: String) : UiState()
 }
 
@@ -153,10 +155,13 @@ class MainViewModel : ViewModel() {
         try {
             _uiState.value = UiState.Analyzing("Fetching Final Report...", appName)
             val reportStr = ApiClient.instance.getReport(runId).string()
-            val json = JSONObject(reportStr)
-            val leakCount = json.optInt("definitive_leaks_count", 0)
+            val report = try {
+                Gson().fromJson(reportStr, AnalysisReport::class.java)
+            } catch (e: Exception) {
+                AnalysisReport(definitive_leaks_count = 0)
+            }
             
-            _uiState.value = UiState.Result(leakCount, reportStr, appName)
+            _uiState.value = UiState.Result(report, reportStr, appName)
         } catch (e: Exception) {
             _uiState.value = UiState.Error(e.message ?: "Failed to fetch report")
         }

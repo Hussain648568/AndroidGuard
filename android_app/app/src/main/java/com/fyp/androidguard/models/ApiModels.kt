@@ -1,4 +1,4 @@
-﻿package com.fyp.androidguard.models
+package com.fyp.androidguard.models
 
 import com.google.gson.annotations.SerializedName
 
@@ -14,14 +14,30 @@ data class StatusResponse(
     @SerializedName("error") val error: String?
 )
 
-data class LeakFinding(
-    val source: String,
-    val sink: String,
-    val confidence: String
+data class FindingNode(
+    val type: String? = null,
+    val kind: String? = null,
+    @SerializedName("class") val className: String? = null,
+    val method: String? = null,
+    val target_signature: String? = null,
+    val category: String? = null,
+    val file: String? = null,
+    val line_no: Int? = null
 )
 
-data class ReportResponse(
-    val status: String,
-    val definitive_leaks_count: Int,
-    val apk_path: String
+data class LeakFinding(
+    val source: FindingNode? = null,
+    val sink: FindingNode? = null,
+    val link_level: String? = null,
+    val confidence: String? = null,
+    val analysis_tier: String? = null
+)
+
+data class AnalysisReport(
+    val apk_path: String? = null,
+    val status: String? = null,
+    val engine: String? = null,
+    val total_raw_findings: Int = 0,
+    val definitive_leaks_count: Int = 0,
+    val findings: List<LeakFinding> = emptyList()
 )

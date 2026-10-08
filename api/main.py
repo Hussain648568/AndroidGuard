@@ -1,4 +1,4 @@
-﻿import os
+import os
 import uuid
 import asyncio
 import subprocess
@@ -18,38 +18,84 @@ REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 # Status store (in-memory for Iteration 1)
 analysis_jobs = {}
 
-def run_analysis(run_id: str, apk_path: str):
-    analysis_jobs[run_id] = {"status": "running", "stage": "FlowDroid"}
+import xml.etree.ElementTree as ET
+
+def parse_flowdroid_xml(xml_path: Path, apk_path: str) -> dict:
+    findings = []
+    try:
+        tree = ET.parse(str(xml_path))
+        root = tree.getroot()
+        for result in root.iter("Result"):
+            sink_elem = result.find("Sink")
+            sink_stmt = sink_elem.attrib.get("Statement", "") if sink_elem is not None else ""
+            sink_method = sink_elem.attrib.get("Method", "") if sink_elem is not None else ""
+            
+            for src_elem in result.iter("Source"):
+                src_stmt = src_elem.attrib.get("Statement", "")
+                src_method = src_elem.attrib.get("Method", "")
+                findings.append({
+                    "source": {
+                        "class": src_method.split(":")[0].strip("< ") if ":" in src_method else src_method,
+                        "method": src_method,
+                        "target_signature": src_stmt,
+                        "category": "TAINT_SOURCE"
+                    },
+                    "sink": {
+                        "class": sink_method.split(":")[0].strip("< ") if ":" in sink_method else sink_method,
+                        "method": sink_method,
+                        "target_signature": sink_stmt,
+                        "category": "TAINT_SINK"
+                    },
+                    "confidence": "HIGH",
+                    "link_level": "FlowDroid TaintFlow"
+                })
+    except Exception:
+        pass
     
-    # 1. Try FlowDroid (using the existing JAR)
+    return {
+        "apk_path": apk_path,
+        "status": "success",
+        "engine": "FlowDroid",
+        "definitive_leaks_count": len(findings),
+        "findings": findings
+    }
+
+def run_analysis(run_id: str, apk_path: str):
+    out_json = REPORTS_DIR / f"{run_id}_report.json"
+    
+    # 1. Primary Engine: FlowDroid
+    analysis_jobs[run_id] = {"status": "running", "stage": "FlowDroid Precision Analysis"}
     flowdroid_jar = BASE_DIR / "FlowDroid-2.15.1" / "soot-infoflow-cmd" / "target" / "soot-infoflow-cmd-jar-with-dependencies.jar"
-    platforms_dir = BASE_DIR / "FlowDroid-2.15.1" / "android-platforms" # if exists
+    platforms_dir = "C:/Users/musab/AppData/Local/Android/Sdk/platforms"
     sinks_file = BASE_DIR / "datasets" / "SourcesAndSinks.txt"
     out_xml = REPORTS_DIR / f"{run_id}_flowdroid.xml"
     
     flowdroid_cmd = [
         "java", "-Xmx4g", "-jar", str(flowdroid_jar),
         "-a", apk_path,
-        "-p", "C:/Users/musab/AppData/Local/Android/Sdk/platforms", # We can use local Android SDK platforms
+        "-p", platforms_dir,
         "-s", str(sinks_file),
         "-o", str(out_xml)
     ]
     
     try:
-        # Run FlowDroid with a strict timeout (e.g., 3 minutes for testing)
-        process = subprocess.run(flowdroid_cmd, capture_output=True, text=True, timeout=180)
+        # Run FlowDroid with 2 minute timeout before graceful fallback
+        process = subprocess.run(flowdroid_cmd, capture_output=True, text=True, timeout=120)
         if process.returncode == 0 and out_xml.exists():
-            analysis_jobs[run_id] = {"status": "success", "engine": "FlowDroid", "report_path": str(out_xml)}
+            report_data = parse_flowdroid_xml(out_xml, apk_path)
+            with open(out_json, "w", encoding="utf-8") as f:
+                json.dump(report_data, f, indent=2)
+            analysis_jobs[run_id] = {"status": "success", "engine": "FlowDroid", "report_path": str(out_json)}
             return
         else:
-            analysis_jobs[run_id]["stage"] = f"FlowDroid failed with code {process.returncode}. Switching to Fallback."
+            analysis_jobs[run_id]["stage"] = f"FlowDroid inconclusive (code {process.returncode}). Switching to Fallback Analyzer..."
     except subprocess.TimeoutExpired:
-        analysis_jobs[run_id]["stage"] = "FlowDroid timeout (OOM/Hang). Switching to Fallback Analyzer."
-    
-    # 2. FlowDroid Failed/Timeout -> Run Fallback Analyzer
-    analysis_jobs[run_id]["stage"] = "Fallback Analyzer"
-    out_json = REPORTS_DIR / f"{run_id}_report.json"
-    
+        analysis_jobs[run_id]["stage"] = "FlowDroid timeout/OOM. Switching to Fallback Analyzer..."
+    except Exception as e:
+        analysis_jobs[run_id]["stage"] = f"FlowDroid error ({e}). Switching to Fallback Analyzer..."
+        
+    # 2. Secondary Engine: Fallback Heuristic Analyzer
+    analysis_jobs[run_id]["stage"] = "Running Fallback Analyzer (Multi-threaded Smali AST Engine)..."
     fallback_cmd = [
         "python", "-m", "fallback_analyzer.cli",
         apk_path,
@@ -58,11 +104,12 @@ def run_analysis(run_id: str, apk_path: str):
     ]
     
     try:
-        process = subprocess.run(fallback_cmd, capture_output=True, text=True, cwd=str(BASE_DIR), timeout=300)
+        process = subprocess.run(fallback_cmd, capture_output=True, text=True, cwd=str(BASE_DIR), timeout=900)
         if process.returncode == 0 and out_json.exists():
             analysis_jobs[run_id] = {"status": "success", "engine": "Fallback", "report_path": str(out_json)}
         else:
-            analysis_jobs[run_id] = {"status": "failed", "error": "Fallback analyzer also failed."}
+            err_msg = process.stderr.strip() if process.stderr else "Fallback analyzer execution error."
+            analysis_jobs[run_id] = {"status": "failed", "error": err_msg}
     except Exception as e:
         analysis_jobs[run_id] = {"status": "failed", "error": str(e)}
 

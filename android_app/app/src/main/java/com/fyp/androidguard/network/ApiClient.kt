@@ -8,7 +8,7 @@ import java.util.concurrent.TimeUnit
 object ApiClient {
     // We will use 10.0.2.2 for Android Emulator connecting to localhost
     // Change this to the PC's actual local IP address if running on a real device.
-    private const val BASE_URL = "http://10.0.2.2:8080/"
+    private const val BASE_URL = "http://127.0.0.1:8080/"
 
     private val okHttpClient = OkHttpClient.Builder()
         .connectTimeout(60, TimeUnit.SECONDS)
