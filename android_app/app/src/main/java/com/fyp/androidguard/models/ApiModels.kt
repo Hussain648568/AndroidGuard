@@ -8,6 +8,12 @@ data class AnalyzeResponse(
     @SerializedName("cached") val cached: Boolean = false
 )
 
+data class CacheCheckResponse(
+    val cached: Boolean,
+    @SerializedName("run_id") val runId: String? = null,
+    val message: String? = null
+)
+
 data class StatusResponse(
     @SerializedName("status") val status: String,
     @SerializedName("stage") val stage: String?,

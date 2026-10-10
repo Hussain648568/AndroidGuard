@@ -86,6 +86,22 @@ class AnalysisService : Service() {
             throw IllegalStateException("APK file not accessible on device: $sourceDir")
         }
 
+        updateProgress(appName, "Checking SHA-256 cryptographic cache...")
+        val sha256 = com.fyp.androidguard.utils.CryptoUtils.calculateFileSha256(apkFile)
+
+        // 1. Pre-upload Cache Check: Avoid uploading large APK if already analyzed
+        try {
+            val cacheCheck = ApiClient.instance.checkCache(sha256)
+            if (cacheCheck.cached && !cacheCheck.runId.isNullOrEmpty()) {
+                updateProgress(appName, "Retrieved instantly from SHA-256 Cache (<0.1s)!")
+                handleCompletedReport(appName, packageName, sha256, cacheCheck.runId, isCached = true)
+                return
+            }
+        } catch (e: Exception) {
+            // Transient cache lookup failure, fallback to direct upload
+        }
+
+        // 2. Cache Miss: Upload APK
         updateProgress(appName, "Uploading ${appName} APK to server...")
 
         val requestFile = apkFile.asRequestBody("application/vnd.android.package-archive".toMediaTypeOrNull())
@@ -94,6 +110,13 @@ class AnalysisService : Service() {
 
         val uploadResponse = ApiClient.instance.uploadApk(body)
         val runId = uploadResponse.runId
+
+        // If server hit cache during upload
+        if (uploadResponse.cached) {
+            updateProgress(appName, "Analysis loaded instantly from cache!")
+            handleCompletedReport(appName, packageName, sha256, runId, isCached = true)
+            return
+        }
 
         AnalysisStateManager.setJob(
             ActiveAnalysisJob(appName, packageName, "Queued on server...", runId)
@@ -118,37 +141,7 @@ class AnalysisService : Service() {
                     "success" -> {
                         isCompleted = true
                         updateProgress(appName, "Retrieving and parsing final audit report...")
-
-                        val reportStr = ApiClient.instance.getReport(runId).string()
-                        val report = try {
-                            Gson().fromJson(reportStr, AnalysisReport::class.java)
-                        } catch (e: Exception) {
-                            AnalysisReport(definitive_leaks_count = 0)
-                        }
-
-                        val result = UiState.Result(report, reportStr, appName)
-                        AnalysisStateManager.setResult(result)
-
-                        val historyItem = com.fyp.androidguard.models.AuditHistoryItem(
-                            appName = appName,
-                            packageName = packageName,
-                            sha256 = report.sha256 ?: "",
-                            definitiveLeaksCount = report.definitive_leaks_count,
-                            riskScore = report.risk_assessment?.score ?: 0.0,
-                            riskGrade = report.risk_assessment?.grade ?: "N/A",
-                            severity = report.risk_assessment?.severity ?: "UNKNOWN",
-                            engine = report.engine ?: "Static Analysis",
-                            timestamp = System.currentTimeMillis(),
-                            rawJson = reportStr
-                        )
-                        AuditHistoryManager.saveAudit(this@AnalysisService, historyItem)
-
-                        NotificationHelper.showCompletionNotification(
-                            this@AnalysisService,
-                            appName,
-                            report.definitive_leaks_count,
-                            report.engine ?: "Static"
-                        )
+                        handleCompletedReport(appName, packageName, sha256, runId, isCached = false)
                     }
                     "failed" -> {
                         isCompleted = true
@@ -167,6 +160,46 @@ class AnalysisService : Service() {
             AnalysisStateManager.setError(timeoutError)
             NotificationHelper.showFailureNotification(this@AnalysisService, appName, timeoutError)
         }
+    }
+
+    private suspend fun handleCompletedReport(
+        appName: String,
+        packageName: String,
+        sha256: String,
+        runId: String,
+        isCached: Boolean
+    ) {
+        val reportStr = ApiClient.instance.getReport(runId).string()
+        val report = try {
+            Gson().fromJson(reportStr, AnalysisReport::class.java)
+        } catch (e: Exception) {
+            AnalysisReport(definitive_leaks_count = 0)
+        }
+
+        val result = UiState.Result(report, reportStr, appName)
+        AnalysisStateManager.setResult(result)
+
+        val engineName = if (isCached) "SHA-256 Cache (Instant)" else (report.engine ?: "Static Analysis")
+        val historyItem = com.fyp.androidguard.models.AuditHistoryItem(
+            appName = appName,
+            packageName = packageName,
+            sha256 = report.sha256 ?: sha256,
+            definitiveLeaksCount = report.definitive_leaks_count,
+            riskScore = report.risk_assessment?.score ?: 0.0,
+            riskGrade = report.risk_assessment?.grade ?: "N/A",
+            severity = report.risk_assessment?.severity ?: "UNKNOWN",
+            engine = engineName,
+            timestamp = System.currentTimeMillis(),
+            rawJson = reportStr
+        )
+        AuditHistoryManager.saveAudit(this@AnalysisService, historyItem)
+
+        NotificationHelper.showCompletionNotification(
+            this@AnalysisService,
+            appName,
+            report.definitive_leaks_count,
+            engineName
+        )
     }
 
     private fun updateProgress(appName: String, stage: String) {

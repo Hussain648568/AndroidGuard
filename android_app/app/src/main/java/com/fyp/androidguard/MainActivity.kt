@@ -37,9 +37,11 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.PictureAsPdf
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Assessment
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -228,6 +230,7 @@ fun AppContent(viewModel: MainViewModel = viewModel()) {
                             AppListScreen(
                                 apps = state.apps,
                                 activeJob = activeJob,
+                                historyList = historyList,
                                 onAppSelected = { app ->
                                     viewModel.startBackgroundAnalysis(context, app)
                                     Toast.makeText(
@@ -235,6 +238,9 @@ fun AppContent(viewModel: MainViewModel = viewModel()) {
                                         "Analysis started in background for ${app.appName}!",
                                         Toast.LENGTH_SHORT
                                     ).show()
+                                },
+                                onViewHistoryReport = { item ->
+                                    viewModel.openHistoryReport(item)
                                 }
                             )
                         } else {
@@ -280,7 +286,9 @@ fun LoadingScreen(message: String) {
 fun AppListScreen(
     apps: List<InstalledApp>,
     activeJob: ActiveAnalysisJob?,
-    onAppSelected: (InstalledApp) -> Unit
+    historyList: List<AuditHistoryItem>,
+    onAppSelected: (InstalledApp) -> Unit,
+    onViewHistoryReport: (AuditHistoryItem) -> Unit
 ) {
     var searchQuery by remember { mutableStateOf("") }
     val filteredApps = remember(searchQuery, apps) {
@@ -412,6 +420,7 @@ fun AppListScreen(
             ) {
                 itemsIndexed(filteredApps) { _, app ->
                     val isAppCurrentlyAnalyzing = activeJob?.packageName == app.packageName
+                    val auditedItem = historyList.find { it.packageName == app.packageName }
 
                     Card(
                         modifier = Modifier.fillMaxWidth(),
@@ -420,11 +429,19 @@ fun AppListScreen(
                         colors = CardDefaults.cardColors(
                             containerColor = if (isAppCurrentlyAnalyzing)
                                 MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f)
+                            else if (auditedItem != null)
+                                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)
                             else
                                 MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
                         ),
                         onClick = {
-                            if (!isAppCurrentlyAnalyzing) onAppSelected(app)
+                            if (!isAppCurrentlyAnalyzing) {
+                                if (auditedItem != null) {
+                                    onViewHistoryReport(auditedItem)
+                                } else {
+                                    onAppSelected(app)
+                                }
+                            }
                         }
                     ) {
                         Row(
@@ -454,6 +471,29 @@ fun AppListScreen(
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
+                                if (auditedItem != null) {
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Surface(
+                                        shape = RoundedCornerShape(6.dp),
+                                        color = when (auditedItem.riskGrade) {
+                                            "A+", "A" -> Color(0xFF2E7D32).copy(alpha = 0.15f)
+                                            "B", "C" -> Color(0xFFF57C00).copy(alpha = 0.15f)
+                                            else -> Color(0xFFD32F2F).copy(alpha = 0.15f)
+                                        }
+                                    ) {
+                                        Text(
+                                            text = "Audited: Grade ${auditedItem.riskGrade} • ${auditedItem.definitiveLeaksCount} leaks",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = when (auditedItem.riskGrade) {
+                                                "A+", "A" -> Color(0xFF2E7D32)
+                                                "B", "C" -> Color(0xFFE65100)
+                                                else -> Color(0xFFD32F2F)
+                                            },
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                }
                             }
                             Spacer(modifier = Modifier.width(8.dp))
                             if (isAppCurrentlyAnalyzing) {
@@ -468,6 +508,34 @@ fun AppListScreen(
                                         CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
                                         Spacer(modifier = Modifier.width(6.dp))
                                         Text("Running", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            } else if (auditedItem != null) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Button(
+                                        onClick = { onViewHistoryReport(auditedItem) },
+                                        shape = RoundedCornerShape(10.dp),
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = MaterialTheme.colorScheme.primaryContainer,
+                                            contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                                        ),
+                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)
+                                    ) {
+                                        Icon(Icons.Default.Assessment, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("View Report", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                    }
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    IconButton(
+                                        onClick = { onAppSelected(app) },
+                                        modifier = Modifier.size(36.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Refresh,
+                                            contentDescription = "Re-analyze",
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(20.dp)
+                                        )
                                     }
                                 }
                             } else {

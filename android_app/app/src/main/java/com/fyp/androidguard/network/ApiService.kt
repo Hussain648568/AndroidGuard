@@ -1,4 +1,4 @@
-﻿package com.fyp.androidguard.network
+package com.fyp.androidguard.network
 
 import com.fyp.androidguard.models.AnalyzeResponse
 import com.fyp.androidguard.models.StatusResponse
@@ -11,6 +11,9 @@ import retrofit2.http.Path
 import okhttp3.ResponseBody
 
 interface ApiService {
+    @GET("/api/v1/cache/check/{sha256}")
+    suspend fun checkCache(@Path("sha256") sha256: String): com.fyp.androidguard.models.CacheCheckResponse
+
     @Multipart
     @POST("/api/v1/analyze")
     suspend fun uploadApk(@Part file: MultipartBody.Part): AnalyzeResponse
