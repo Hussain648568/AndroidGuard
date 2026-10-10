@@ -1,12 +1,18 @@
 package com.fyp.androidguard
 
+import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.ExperimentalAnimationApi
 import androidx.compose.foundation.Image
@@ -24,8 +30,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.HourglassTop
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Warning
@@ -46,8 +54,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.fyp.androidguard.models.LeakFinding
+import com.fyp.androidguard.services.ActiveAnalysisJob
+import com.fyp.androidguard.services.AnalysisStateManager
 import com.fyp.androidguard.ui.screens.InstalledApp
 import com.fyp.androidguard.ui.screens.MainViewModel
 import com.fyp.androidguard.ui.screens.UiState
@@ -55,16 +66,38 @@ import com.fyp.androidguard.ui.theme.AndroidGuardTheme
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
+
+    private var viewModelInstance: MainViewModel? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        handleNotificationIntent(intent)
+
         setContent {
             AndroidGuardTheme {
+                val vm: MainViewModel = viewModel()
+                viewModelInstance = vm
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    AppContent()
+                    AppContent(viewModel = vm)
                 }
+            }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleNotificationIntent(intent)
+    }
+
+    private fun handleNotificationIntent(intent: Intent?) {
+        if (intent?.getBooleanExtra("EXTRA_SHOW_RESULT", false) == true) {
+            val result = AnalysisStateManager.latestResult.value
+            if (result != null) {
+                viewModelInstance?.viewActiveResult(result)
             }
         }
     }
@@ -99,8 +132,23 @@ fun Modifier.verticalScrollbar(
 fun AppContent(viewModel: MainViewModel = viewModel()) {
     val context = LocalContext.current
     val uiState by viewModel.uiState.collectAsState()
+    val activeJob by viewModel.activeJob.collectAsState()
+
+    // Request notification permissions for Android 13+ (API 33+)
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { /* Permission result handled */ }
 
     LaunchedEffect(Unit) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.POST_NOTIFICATIONS
+                ) != PackageManager.PERMISSION_GRANTED
+            ) {
+                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
         viewModel.loadInstalledApps(context)
     }
 
@@ -141,9 +189,18 @@ fun AppContent(viewModel: MainViewModel = viewModel()) {
             AnimatedContent(targetState = uiState, label = "ScreenTransition") { state ->
                 when (state) {
                     is UiState.LoadingApps -> LoadingScreen("Discovering installed applications...")
-                    is UiState.AppList -> AppListScreen(state.apps) { app -> viewModel.analyzeApp(app) }
-                    is UiState.Uploading -> LoadingScreen(state.message)
-                    is UiState.Analyzing -> LoadingScreen(state.stage)
+                    is UiState.AppList -> AppListScreen(
+                        apps = state.apps,
+                        activeJob = activeJob,
+                        onAppSelected = { app ->
+                            viewModel.startBackgroundAnalysis(context, app)
+                            Toast.makeText(
+                                context,
+                                "Analysis started in background for ${app.appName}! You can freely use other apps.",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                    )
                     is UiState.Result -> ResultScreen(state, onBack = { viewModel.resetToAppList() })
                     is UiState.Error -> ErrorScreen(state.error) { viewModel.resetToAppList() }
                 }
@@ -173,17 +230,15 @@ fun LoadingScreen(message: String) {
             fontWeight = FontWeight.SemiBold,
             color = MaterialTheme.colorScheme.onSurface
         )
-        Spacer(modifier = Modifier.height(8.dp))
-        Text(
-            text = "Analyzing permissions, bytecode and taint paths...",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
     }
 }
 
 @Composable
-fun AppListScreen(apps: List<InstalledApp>, onAppSelected: (InstalledApp) -> Unit) {
+fun AppListScreen(
+    apps: List<InstalledApp>,
+    activeJob: ActiveAnalysisJob?,
+    onAppSelected: (InstalledApp) -> Unit
+) {
     var searchQuery by remember { mutableStateOf("") }
     val filteredApps = remember(searchQuery, apps) {
         if (searchQuery.isBlank()) apps
@@ -198,13 +253,78 @@ fun AppListScreen(apps: List<InstalledApp>, onAppSelected: (InstalledApp) -> Uni
 
     Box(modifier = Modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize()) {
-            // Search Bar for Emulator ease
+            // Active Background Analysis Banner Card
+            if (activeJob != null) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.primaryContainer
+                    ),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+                ) {
+                    Column(modifier = Modifier.padding(14.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(24.dp),
+                                strokeWidth = 3.dp,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Analyzing ${activeJob.appName} (in Background)",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                                Text(
+                                    text = activeJob.stage,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f),
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .background(
+                                    MaterialTheme.colorScheme.surface.copy(alpha = 0.6f),
+                                    shape = RoundedCornerShape(8.dp)
+                                )
+                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.NotificationsActive,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Takes up to 30 mins. You can freely use other apps. A notification will alert you when complete!",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Search Bar for quick filtering on emulator
             OutlinedTextField(
                 value = searchQuery,
                 onValueChange = { searchQuery = it },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                    .padding(horizontal = 16.dp, vertical = 6.dp),
                 placeholder = { Text("Search apps (e.g. 'Calculator')...") },
                 leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
                 trailingIcon = {
@@ -232,7 +352,7 @@ fun AppListScreen(apps: List<InstalledApp>, onAppSelected: (InstalledApp) -> Uni
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Text(
-                    text = "Tap Analyze to start inspection",
+                    text = "Tap Analyze to inspect in background",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.outline
                 )
@@ -248,12 +368,21 @@ fun AppListScreen(apps: List<InstalledApp>, onAppSelected: (InstalledApp) -> Uni
                     .verticalScrollbar(listState)
             ) {
                 itemsIndexed(filteredApps) { _, app ->
+                    val isAppCurrentlyAnalyzing = activeJob?.packageName == app.packageName
+
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(16.dp),
                         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
-                        onClick = { onAppSelected(app) }
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (isAppCurrentlyAnalyzing)
+                                MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f)
+                            else
+                                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                        ),
+                        onClick = {
+                            if (!isAppCurrentlyAnalyzing) onAppSelected(app)
+                        }
                     ) {
                         Row(
                             modifier = Modifier.padding(14.dp),
@@ -284,12 +413,28 @@ fun AppListScreen(apps: List<InstalledApp>, onAppSelected: (InstalledApp) -> Uni
                                 )
                             }
                             Spacer(modifier = Modifier.width(8.dp))
-                            Button(
-                                onClick = { onAppSelected(app) },
-                                shape = RoundedCornerShape(10.dp),
-                                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
-                            ) {
-                                Text("Analyze", fontWeight = FontWeight.SemiBold)
+                            if (isAppCurrentlyAnalyzing) {
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text("Running", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            } else {
+                                Button(
+                                    onClick = { onAppSelected(app) },
+                                    shape = RoundedCornerShape(10.dp),
+                                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
+                                ) {
+                                    Text("Analyze", fontWeight = FontWeight.SemiBold)
+                                }
                             }
                         }
                     }

@@ -79,22 +79,28 @@ def run_analysis(run_id: str, apk_path: str):
     ]
     
     try:
-        # Run FlowDroid with 2 minute timeout before graceful fallback
-        process = subprocess.run(flowdroid_cmd, capture_output=True, text=True, timeout=120)
-        if process.returncode == 0 and out_xml.exists():
+        # Run FlowDroid with 30 minute timeout (1800 seconds)
+        process = subprocess.run(flowdroid_cmd, capture_output=True, text=True, timeout=1800)
+        if process.returncode == 0 and out_xml.exists() and out_xml.stat().st_size > 0:
             report_data = parse_flowdroid_xml(out_xml, apk_path)
             with open(out_json, "w", encoding="utf-8") as f:
                 json.dump(report_data, f, indent=2)
-            analysis_jobs[run_id] = {"status": "success", "engine": "FlowDroid", "report_path": str(out_json)}
+            analysis_jobs[run_id] = {
+                "status": "success",
+                "engine": "FlowDroid",
+                "stage": "FlowDroid Completed Successfully",
+                "report_path": str(out_json)
+            }
             return
         else:
-            analysis_jobs[run_id]["stage"] = f"FlowDroid inconclusive (code {process.returncode}). Switching to Fallback Analyzer..."
+            err_reason = f"code {process.returncode}" if process.returncode != 0 else "empty/missing XML output"
+            analysis_jobs[run_id]["stage"] = f"FlowDroid failed ({err_reason}). Engaging Fallback Analyzer..."
     except subprocess.TimeoutExpired:
-        analysis_jobs[run_id]["stage"] = "FlowDroid timeout/OOM. Switching to Fallback Analyzer..."
+        analysis_jobs[run_id]["stage"] = "FlowDroid timed out (30m limit reached). Engaging Fallback Analyzer..."
     except Exception as e:
-        analysis_jobs[run_id]["stage"] = f"FlowDroid error ({e}). Switching to Fallback Analyzer..."
+        analysis_jobs[run_id]["stage"] = f"FlowDroid encountered error ({e}). Engaging Fallback Analyzer..."
         
-    # 2. Secondary Engine: Fallback Heuristic Analyzer
+    # 2. Secondary Engine: Fallback Heuristic Analyzer (Only runs if FlowDroid failed above)
     analysis_jobs[run_id]["stage"] = "Running Fallback Analyzer (Multi-threaded Smali AST Engine)..."
     fallback_cmd = [
         "python", "-m", "fallback_analyzer.cli",
@@ -104,12 +110,19 @@ def run_analysis(run_id: str, apk_path: str):
     ]
     
     try:
-        process = subprocess.run(fallback_cmd, capture_output=True, text=True, cwd=str(BASE_DIR), timeout=900)
+        process = subprocess.run(fallback_cmd, capture_output=True, text=True, cwd=str(BASE_DIR), timeout=1800)
         if process.returncode == 0 and out_json.exists():
-            analysis_jobs[run_id] = {"status": "success", "engine": "Fallback", "report_path": str(out_json)}
+            analysis_jobs[run_id] = {
+                "status": "success",
+                "engine": "Fallback",
+                "stage": "Fallback Analyzer Completed Successfully",
+                "report_path": str(out_json)
+            }
         else:
-            err_msg = process.stderr.strip() if process.stderr else "Fallback analyzer execution error."
+            err_msg = process.stderr.strip() if process.stderr else f"Fallback analyzer exited with code {process.returncode}."
             analysis_jobs[run_id] = {"status": "failed", "error": err_msg}
+    except subprocess.TimeoutExpired:
+        analysis_jobs[run_id] = {"status": "failed", "error": "Fallback Analyzer timed out (30m limit reached)."}
     except Exception as e:
         analysis_jobs[run_id] = {"status": "failed", "error": str(e)}
 
