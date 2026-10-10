@@ -17,6 +17,7 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.ExperimentalAnimationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
@@ -27,15 +28,18 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Clear
-import androidx.compose.material.icons.filled.HourglassTop
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.NotificationsActive
+import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -50,12 +54,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.fyp.androidguard.models.AuditHistoryItem
 import com.fyp.androidguard.models.LeakFinding
 import com.fyp.androidguard.services.ActiveAnalysisJob
 import com.fyp.androidguard.services.AnalysisStateManager
@@ -63,7 +69,11 @@ import com.fyp.androidguard.ui.screens.InstalledApp
 import com.fyp.androidguard.ui.screens.MainViewModel
 import com.fyp.androidguard.ui.screens.UiState
 import com.fyp.androidguard.ui.theme.AndroidGuardTheme
+import com.fyp.androidguard.utils.ReportExporter
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class MainActivity : ComponentActivity() {
 
@@ -133,11 +143,13 @@ fun AppContent(viewModel: MainViewModel = viewModel()) {
     val context = LocalContext.current
     val uiState by viewModel.uiState.collectAsState()
     val activeJob by viewModel.activeJob.collectAsState()
+    val historyList by viewModel.history.collectAsState()
 
-    // Request notification permissions for Android 13+ (API 33+)
+    var navigationTab by remember { mutableIntStateOf(0) } // 0 = Apps, 1 = Past Audits
+
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
-    ) { /* Permission result handled */ }
+    ) { }
 
     LaunchedEffect(Unit) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -150,6 +162,7 @@ fun AppContent(viewModel: MainViewModel = viewModel()) {
             }
         }
         viewModel.loadInstalledApps(context)
+        viewModel.loadHistory(context)
     }
 
     Scaffold(
@@ -183,24 +196,54 @@ fun AppContent(viewModel: MainViewModel = viewModel()) {
                     }
                 }
             )
+        },
+        bottomBar = {
+            if (uiState is UiState.AppList) {
+                NavigationBar {
+                    NavigationBarItem(
+                        selected = navigationTab == 0,
+                        onClick = { navigationTab = 0 },
+                        icon = { Icon(Icons.Default.Apps, contentDescription = "Apps") },
+                        label = { Text("Installed Apps") }
+                    )
+                    NavigationBarItem(
+                        selected = navigationTab == 1,
+                        onClick = {
+                            navigationTab = 1
+                            viewModel.loadHistory(context)
+                        },
+                        icon = { Icon(Icons.Default.History, contentDescription = "Past Audits") },
+                        label = { Text("Audit History (${historyList.size})") }
+                    )
+                }
+            }
         }
     ) { paddingValues ->
         Box(modifier = Modifier.padding(paddingValues)) {
             AnimatedContent(targetState = uiState, label = "ScreenTransition") { state ->
                 when (state) {
                     is UiState.LoadingApps -> LoadingScreen("Discovering installed applications...")
-                    is UiState.AppList -> AppListScreen(
-                        apps = state.apps,
-                        activeJob = activeJob,
-                        onAppSelected = { app ->
-                            viewModel.startBackgroundAnalysis(context, app)
-                            Toast.makeText(
-                                context,
-                                "Analysis started in background for ${app.appName}! You can freely use other apps.",
-                                Toast.LENGTH_LONG
-                            ).show()
+                    is UiState.AppList -> {
+                        if (navigationTab == 0) {
+                            AppListScreen(
+                                apps = state.apps,
+                                activeJob = activeJob,
+                                onAppSelected = { app ->
+                                    viewModel.startBackgroundAnalysis(context, app)
+                                    Toast.makeText(
+                                        context,
+                                        "Analysis started in background for ${app.appName}!",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                }
+                            )
+                        } else {
+                            AuditHistoryScreen(
+                                history = historyList,
+                                onOpenReport = { item -> viewModel.openHistoryReport(item) }
+                            )
                         }
-                    )
+                    }
                     is UiState.Result -> ResultScreen(state, onBack = { viewModel.resetToAppList() })
                     is UiState.Error -> ErrorScreen(state.error) { viewModel.resetToAppList() }
                 }
@@ -309,7 +352,7 @@ fun AppListScreen(
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = "Takes up to 30 mins. You can freely use other apps. A notification will alert you when complete!",
+                                text = "Running in background (up to 30 mins). You can freely use other apps. A notification will alert you when complete!",
                                 fontSize = 11.sp,
                                 color = MaterialTheme.colorScheme.onSurface
                             )
@@ -352,7 +395,7 @@ fun AppListScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Text(
-                    text = "Tap Analyze to inspect in background",
+                    text = "Tap Analyze to inspect",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.outline
                 )
@@ -476,15 +519,134 @@ fun AppListScreen(
 }
 
 @Composable
+fun AuditHistoryScreen(
+    history: List<AuditHistoryItem>,
+    onOpenReport: (AuditHistoryItem) -> Unit
+) {
+    if (history.isEmpty()) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(32.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Icon(
+                imageVector = Icons.Default.History,
+                contentDescription = null,
+                modifier = Modifier.size(64.dp),
+                tint = MaterialTheme.colorScheme.outline
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            Text(
+                "No Past Audits Found",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                "Completed security audits are automatically saved here for instant offline inspection.",
+                textAlign = TextAlign.Center,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    } else {
+        val listState = rememberLazyListState()
+        LazyColumn(
+            state = listState,
+            contentPadding = PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScrollbar(listState)
+        ) {
+            item {
+                Text(
+                    text = "Past Security Audits (${history.size})",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(bottom = 4.dp)
+                )
+            }
+            itemsIndexed(history) { _, item ->
+                val dateStr = SimpleDateFormat("MMM dd, yyyy HH:mm", Locale.getDefault()).format(Date(item.timestamp))
+                val isCritical = item.definitiveLeaksCount > 0
+
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+                    onClick = { onOpenReport(item) }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // Grade Circle
+                        Box(
+                            modifier = Modifier
+                                .size(50.dp)
+                                .clip(CircleShape)
+                                .background(if (isCritical) Color(0xFFFFEBEE) else Color(0xFFE8F5E9))
+                                .border(2.dp, if (isCritical) Color(0xFFD32F2F) else Color(0xFF2E7D32), CircleShape),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = item.riskGrade,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 18.sp,
+                                color = if (isCritical) Color(0xFFD32F2F) else Color(0xFF2E7D32)
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.width(14.dp))
+
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = item.appName,
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "Leaks: ${item.definitiveLeaksCount} | Score: ${item.riskScore}/10",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (isCritical) Color(0xFFD32F2F) else Color(0xFF2E7D32),
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                text = "$dateStr • ${item.engine}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.outline
+                            )
+                        }
+
+                        Button(
+                            onClick = { onOpenReport(item) },
+                            shape = RoundedCornerShape(10.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                        ) {
+                            Text("View", fontSize = 12.sp)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 fun ResultScreen(result: UiState.Result, onBack: () -> Unit) {
     val context = LocalContext.current
     val report = result.report
     val leakCount = report.definitive_leaks_count
     val hasLeaks = leakCount > 0
+    val risk = report.risk_assessment
     var selectedTab by remember { mutableIntStateOf(0) }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        // Executive Summary Banner
+        // Executive Summary Banner + Risk Score Meter
         Card(
             modifier = Modifier
                 .fillMaxWidth()
@@ -496,14 +658,34 @@ fun ResultScreen(result: UiState.Result, onBack: () -> Unit) {
         ) {
             Column(modifier = Modifier.padding(18.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = if (hasLeaks) Icons.Default.Warning else Icons.Default.CheckCircle,
-                        contentDescription = null,
-                        tint = if (hasLeaks) Color(0xFFD32F2F) else Color(0xFF2E7D32),
-                        modifier = Modifier.size(36.dp)
-                    )
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Column {
+                    // Risk Score & Grade Badge
+                    Box(
+                        modifier = Modifier
+                            .size(62.dp)
+                            .clip(CircleShape)
+                            .background(Color.White)
+                            .border(3.dp, if (hasLeaks) Color(0xFFD32F2F) else Color(0xFF2E7D32), CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                text = risk?.grade ?: (if (hasLeaks) "F" else "A+"),
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 20.sp,
+                                color = if (hasLeaks) Color(0xFFD32F2F) else Color(0xFF2E7D32)
+                            )
+                            Text(
+                                text = "GRADE",
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.Gray
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.width(14.dp))
+
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = result.appName,
                             style = MaterialTheme.typography.titleLarge,
@@ -516,21 +698,61 @@ fun ResultScreen(result: UiState.Result, onBack: () -> Unit) {
                             fontWeight = FontWeight.SemiBold,
                             color = if (hasLeaks) Color(0xFFD32F2F) else Color(0xFF2E7D32)
                         )
+                        Text(
+                            text = "Risk Score: ${risk?.score ?: (if (hasLeaks) 9.5 else 0.5)} / 10.0  (${risk?.severity ?: (if (hasLeaks) "CRITICAL" else "CLEAN")})",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.Black.copy(alpha = 0.7f)
+                        )
                     }
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                // Metadata Chips
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    SuggestionChip(
-                        onClick = {},
-                        label = { Text("Engine: ${report.engine ?: "Static Multi-Tier"}") }
-                    )
-                    SuggestionChip(
-                        onClick = {},
-                        label = { Text(if (hasLeaks) "Risk: CRITICAL" else "Risk: LOW") }
-                    )
+                // Recommendation Guidance
+                Text(
+                    text = "💡 ${risk?.recommendation ?: "Inspect detailed data flow traces below."}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.DarkGray,
+                    modifier = Modifier
+                        .background(Color.White.copy(alpha = 0.7f), shape = RoundedCornerShape(8.dp))
+                        .padding(8.dp)
+                        .fillMaxWidth()
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Metadata Chips + Share / PDF Actions
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        SuggestionChip(
+                            onClick = {},
+                            label = { Text(report.engine ?: "Static") }
+                        )
+                        if (report.cached) {
+                            SuggestionChip(
+                                onClick = {},
+                                label = { Text("⚡ Cached") }
+                            )
+                        }
+                    }
+
+                    Row {
+                        IconButton(onClick = {
+                            ReportExporter.shareReportText(context, result.appName, report)
+                        }) {
+                            Icon(Icons.Default.Share, contentDescription = "Share Text", tint = MaterialTheme.colorScheme.primary)
+                        }
+                        IconButton(onClick = {
+                            ReportExporter.exportAndSharePdf(context, result.appName, report)
+                        }) {
+                            Icon(Icons.Default.PictureAsPdf, contentDescription = "Export PDF", tint = Color(0xFFD32F2F))
+                        }
+                    }
                 }
             }
         }
@@ -623,15 +845,35 @@ fun ResultScreen(result: UiState.Result, onBack: () -> Unit) {
             tonalElevation = 4.dp,
             modifier = Modifier.fillMaxWidth()
         ) {
-            Button(
-                onClick = onBack,
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(16.dp)
-                    .height(50.dp),
-                shape = RoundedCornerShape(12.dp)
+                    .padding(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Text("Analyze Another App", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                OutlinedButton(
+                    onClick = {
+                        ReportExporter.exportAndSharePdf(context, result.appName, report)
+                    },
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(48.dp),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Icon(Icons.Default.PictureAsPdf, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Export PDF", fontWeight = FontWeight.Bold)
+                }
+
+                Button(
+                    onClick = onBack,
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(48.dp),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text("Done", fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                }
             }
         }
     }

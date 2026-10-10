@@ -129,6 +129,20 @@ class AnalysisService : Service() {
                         val result = UiState.Result(report, reportStr, appName)
                         AnalysisStateManager.setResult(result)
 
+                        val historyItem = com.fyp.androidguard.models.AuditHistoryItem(
+                            appName = appName,
+                            packageName = packageName,
+                            sha256 = report.sha256 ?: "",
+                            definitiveLeaksCount = report.definitive_leaks_count,
+                            riskScore = report.risk_assessment?.score ?: 0.0,
+                            riskGrade = report.risk_assessment?.grade ?: "N/A",
+                            severity = report.risk_assessment?.severity ?: "UNKNOWN",
+                            engine = report.engine ?: "Static Analysis",
+                            timestamp = System.currentTimeMillis(),
+                            rawJson = reportStr
+                        )
+                        AuditHistoryManager.saveAudit(this@AnalysisService, historyItem)
+
                         NotificationHelper.showCompletionNotification(
                             this@AnalysisService,
                             appName,

@@ -1,4 +1,4 @@
-﻿import pytest
+import pytest
 from fastapi.testclient import TestClient
 from api.main import app, analysis_jobs
 import json
@@ -43,4 +43,10 @@ def test_invalid_file_upload():
 def test_status_not_found():
     response = client.get("/api/v1/status/invalid-uuid-1234")
     assert response.status_code == 404
+
+def test_cache_miss_and_check():
+    # Random sha256 should miss
+    res = client.get("/api/v1/cache/check/nonexistent_sha256_hash_12345")
+    assert res.status_code == 200
+    assert res.json()["cached"] is False
 

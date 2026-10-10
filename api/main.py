@@ -2,23 +2,69 @@ import os
 import uuid
 import asyncio
 import subprocess
+import hashlib
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, HTTPException
 from fastapi.responses import JSONResponse
 import json
 from pathlib import Path
+import xml.etree.ElementTree as ET
 
 app = FastAPI(title="AndroidGuard Analysis API")
 
 BASE_DIR = Path(os.path.abspath(__file__)).parent.parent
 UPLOADS_DIR = BASE_DIR / "runs" / "uploads"
 REPORTS_DIR = BASE_DIR / "runs" / "reports"
+CACHE_DIR = BASE_DIR / "runs" / "cache"
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
-# Status store (in-memory for Iteration 1)
+# Status store (in-memory)
 analysis_jobs = {}
 
-import xml.etree.ElementTree as ET
+def calculate_sha256(file_path: Path) -> str:
+    hasher = hashlib.sha256()
+    with open(file_path, "rb") as f:
+        while chunk := f.read(65536):
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
+def compute_risk_assessment(definitive_leaks_count: int, findings: list) -> dict:
+    if definitive_leaks_count == 0:
+        return {
+            "score": 0.5,
+            "grade": "A+",
+            "severity": "CLEAN",
+            "recommendation": "No dangerous taint leaks detected. Safe for deployment."
+        }
+    elif definitive_leaks_count <= 5:
+        return {
+            "score": 3.2,
+            "grade": "B",
+            "severity": "LOW",
+            "recommendation": "Minor data propagation detected. Review sensitive method calls."
+        }
+    elif definitive_leaks_count <= 25:
+        return {
+            "score": 5.8,
+            "grade": "C",
+            "severity": "MEDIUM",
+            "recommendation": "Multiple unconstrained data flows found. Inspect network & log sinks."
+        }
+    elif definitive_leaks_count <= 80:
+        return {
+            "score": 7.9,
+            "grade": "D",
+            "severity": "HIGH",
+            "recommendation": "Heavy data exfiltration observed across third-party SDKs."
+        }
+    else:
+        return {
+            "score": 9.6,
+            "grade": "F",
+            "severity": "CRITICAL",
+            "recommendation": "Severe security compromise. Extensive sensitive sources routed to sinks."
+        }
 
 def parse_flowdroid_xml(xml_path: Path, apk_path: str) -> dict:
     findings = []
@@ -52,26 +98,29 @@ def parse_flowdroid_xml(xml_path: Path, apk_path: str) -> dict:
     except Exception:
         pass
     
+    leaks_count = len(findings)
     return {
         "apk_path": apk_path,
         "status": "success",
         "engine": "FlowDroid",
-        "definitive_leaks_count": len(findings),
+        "definitive_leaks_count": leaks_count,
+        "risk_assessment": compute_risk_assessment(leaks_count, findings),
         "findings": findings
     }
 
-def run_analysis(run_id: str, apk_path: str):
+def run_analysis(run_id: str, apk_path: str, sha256: str):
     out_json = REPORTS_DIR / f"{run_id}_report.json"
+    cache_json = CACHE_DIR / f"{sha256}.json"
     
     # 1. Primary Engine: FlowDroid
-    analysis_jobs[run_id] = {"status": "running", "stage": "FlowDroid Precision Analysis"}
+    analysis_jobs[run_id] = {"status": "running", "stage": "FlowDroid Precision Analysis", "sha256": sha256}
     flowdroid_jar = BASE_DIR / "FlowDroid-2.15.1" / "soot-infoflow-cmd" / "target" / "soot-infoflow-cmd-jar-with-dependencies.jar"
     platforms_dir = "C:/Users/musab/AppData/Local/Android/Sdk/platforms"
     sinks_file = BASE_DIR / "datasets" / "SourcesAndSinks.txt"
     out_xml = REPORTS_DIR / f"{run_id}_flowdroid.xml"
     
     flowdroid_cmd = [
-        "java", "-Xmx4g", "-jar", str(flowdroid_jar),
+        "java", "-Xmx15g", "-jar", str(flowdroid_jar),
         "-a", apk_path,
         "-p", platforms_dir,
         "-s", str(sinks_file),
@@ -83,12 +132,18 @@ def run_analysis(run_id: str, apk_path: str):
         process = subprocess.run(flowdroid_cmd, capture_output=True, text=True, timeout=1800)
         if process.returncode == 0 and out_xml.exists() and out_xml.stat().st_size > 0:
             report_data = parse_flowdroid_xml(out_xml, apk_path)
+            report_data["sha256"] = sha256
+            
             with open(out_json, "w", encoding="utf-8") as f:
                 json.dump(report_data, f, indent=2)
+            with open(cache_json, "w", encoding="utf-8") as f:
+                json.dump(report_data, f, indent=2)
+                
             analysis_jobs[run_id] = {
                 "status": "success",
                 "engine": "FlowDroid",
                 "stage": "FlowDroid Completed Successfully",
+                "sha256": sha256,
                 "report_path": str(out_json)
             }
             return
@@ -112,10 +167,28 @@ def run_analysis(run_id: str, apk_path: str):
     try:
         process = subprocess.run(fallback_cmd, capture_output=True, text=True, cwd=str(BASE_DIR), timeout=1800)
         if process.returncode == 0 and out_json.exists():
+            # Load Fallback JSON and augment with risk assessment and sha256
+            try:
+                with open(out_json, "r", encoding="utf-8") as f:
+                    report_data = json.load(f)
+                leaks_count = report_data.get("definitive_leaks_count", 0)
+                findings = report_data.get("findings", [])
+                report_data["engine"] = "Fallback"
+                report_data["sha256"] = sha256
+                report_data["risk_assessment"] = compute_risk_assessment(leaks_count, findings)
+                
+                with open(out_json, "w", encoding="utf-8") as f:
+                    json.dump(report_data, f, indent=2)
+                with open(cache_json, "w", encoding="utf-8") as f:
+                    json.dump(report_data, f, indent=2)
+            except Exception:
+                pass
+                
             analysis_jobs[run_id] = {
                 "status": "success",
                 "engine": "Fallback",
                 "stage": "Fallback Analyzer Completed Successfully",
+                "sha256": sha256,
                 "report_path": str(out_json)
             }
         else:
@@ -125,6 +198,38 @@ def run_analysis(run_id: str, apk_path: str):
         analysis_jobs[run_id] = {"status": "failed", "error": "Fallback Analyzer timed out (30m limit reached)."}
     except Exception as e:
         analysis_jobs[run_id] = {"status": "failed", "error": str(e)}
+
+
+@app.get("/api/v1/cache/check/{sha256}")
+def check_cache(sha256: str):
+    cache_json = CACHE_DIR / f"{sha256}.json"
+    if cache_json.exists():
+        try:
+            with open(cache_json, "r", encoding="utf-8") as f:
+                cached_data = json.load(f)
+            # Create a virtual completed run_id so client can query or read it
+            cached_run_id = str(uuid.uuid4())
+            out_json = REPORTS_DIR / f"{cached_run_id}_report.json"
+            with open(out_json, "w", encoding="utf-8") as f:
+                json.dump(cached_data, f, indent=2)
+                
+            analysis_jobs[cached_run_id] = {
+                "status": "success",
+                "engine": cached_data.get("engine", "Cache"),
+                "stage": "Instantly retrieved from Cache",
+                "cached": True,
+                "sha256": sha256,
+                "report_path": str(out_json)
+            }
+            return {
+                "cached": True,
+                "run_id": cached_run_id,
+                "message": "Found in cache! No upload required.",
+                "report": cached_data
+            }
+        except Exception as e:
+            return {"cached": False, "error": str(e)}
+    return {"cached": False}
 
 
 @app.post("/api/v1/analyze")
@@ -139,10 +244,40 @@ async def analyze_apk(background_tasks: BackgroundTasks, file: UploadFile = File
         content = await file.read()
         f.write(content)
         
-    analysis_jobs[run_id] = {"status": "queued"}
-    background_tasks.add_task(run_analysis, run_id, str(apk_path))
+    # Calculate SHA-256
+    sha256 = calculate_sha256(apk_path)
+    cache_json = CACHE_DIR / f"{sha256}.json"
     
-    return {"run_id": run_id, "message": "Analysis started."}
+    # Check cache hit on upload
+    if cache_json.exists():
+        try:
+            with open(cache_json, "r", encoding="utf-8") as f:
+                cached_data = json.load(f)
+            out_json = REPORTS_DIR / f"{run_id}_report.json"
+            with open(out_json, "w", encoding="utf-8") as f:
+                json.dump(cached_data, f, indent=2)
+                
+            analysis_jobs[run_id] = {
+                "status": "success",
+                "engine": cached_data.get("engine", "Cache"),
+                "stage": "Loaded from SHA-256 Cache (Instant)",
+                "cached": True,
+                "sha256": sha256,
+                "report_path": str(out_json)
+            }
+            return {
+                "run_id": run_id,
+                "cached": True,
+                "message": "Analysis loaded instantly from cache!"
+            }
+        except Exception:
+            pass
+            
+    # Cache Miss -> Queue background execution
+    analysis_jobs[run_id] = {"status": "queued", "sha256": sha256}
+    background_tasks.add_task(run_analysis, run_id, str(apk_path), sha256)
+    
+    return {"run_id": run_id, "cached": False, "message": "Analysis started."}
 
 @app.get("/api/v1/status/{run_id}")
 def get_status(run_id: str):
@@ -163,11 +298,5 @@ def get_report(run_id: str):
     if not os.path.exists(report_path):
         raise HTTPException(status_code=404, detail="Report file missing")
         
-    # For now, return raw JSON if Fallback, or a summary if FlowDroid XML
-    if report_path.endswith(".json"):
-        with open(report_path, "r") as f:
-            return json.load(f)
-    else:
-        # TODO: Parse FlowDroid XML and return JSON representation
-        return {"message": "FlowDroid completed (XML output)", "file": report_path}
-
+    with open(report_path, "r", encoding="utf-8") as f:
+        return json.load(f)

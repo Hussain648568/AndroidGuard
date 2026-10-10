@@ -11,9 +11,12 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.fyp.androidguard.models.AnalysisReport
+import com.fyp.androidguard.models.AuditHistoryItem
 import com.fyp.androidguard.services.ActiveAnalysisJob
 import com.fyp.androidguard.services.AnalysisService
 import com.fyp.androidguard.services.AnalysisStateManager
+import com.fyp.androidguard.services.AuditHistoryManager
+import com.google.gson.Gson
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -41,6 +44,9 @@ class MainViewModel : ViewModel() {
 
     val activeJob: StateFlow<ActiveAnalysisJob?> = AnalysisStateManager.activeJob
 
+    private val _history = MutableStateFlow<List<AuditHistoryItem>>(emptyList())
+    val history: StateFlow<List<AuditHistoryItem>> = _history
+
     private var cachedAppList: List<InstalledApp> = emptyList()
 
     init {
@@ -60,7 +66,24 @@ class MainViewModel : ViewModel() {
         }
     }
 
+    fun loadHistory(context: Context) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val items = AuditHistoryManager.getHistory(context)
+            _history.value = items
+        }
+    }
+
+    fun openHistoryReport(item: AuditHistoryItem) {
+        try {
+            val report = Gson().fromJson(item.rawJson, AnalysisReport::class.java)
+            _uiState.value = UiState.Result(report, item.rawJson, item.appName)
+        } catch (e: Exception) {
+            _uiState.value = UiState.Error("Failed to open cached report: ${e.message}")
+        }
+    }
+
     fun loadInstalledApps(context: Context) {
+        loadHistory(context)
         if (cachedAppList.isNotEmpty()) {
             if (_uiState.value !is UiState.Result) {
                 _uiState.value = UiState.AppList(cachedAppList)
@@ -109,9 +132,7 @@ class MainViewModel : ViewModel() {
     }
 
     fun startBackgroundAnalysis(context: Context, app: InstalledApp) {
-        // Starts background foreground service: does NOT freeze the UI!
         AnalysisService.startAnalysis(context, app.appName, app.packageName, app.sourceDir)
-        // Ensure user stays on the app list so they can do other things
         if (cachedAppList.isNotEmpty()) {
             _uiState.value = UiState.AppList(cachedAppList)
         }
