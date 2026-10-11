@@ -214,8 +214,8 @@ fun AppContent(viewModel: MainViewModel = viewModel()) {
                             navigationTab = 1
                             viewModel.loadHistory(context)
                         },
-                        icon = { Icon(Icons.Default.History, contentDescription = "Past Audits") },
-                        label = { Text("Audit History (${historyList.size})") }
+                        icon = { Icon(Icons.Default.History, contentDescription = "Analysis History") },
+                        label = { Text("Analysis History (${historyList.size})") }
                     )
                 }
             }
@@ -244,7 +244,7 @@ fun AppContent(viewModel: MainViewModel = viewModel()) {
                                 }
                             )
                         } else {
-                            AuditHistoryScreen(
+                            AnalysisHistoryScreen(
                                 history = historyList,
                                 onOpenReport = { item -> viewModel.openHistoryReport(item) }
                             )
@@ -475,21 +475,22 @@ fun AppListScreen(
                                     Spacer(modifier = Modifier.height(4.dp))
                                     Surface(
                                         shape = RoundedCornerShape(6.dp),
-                                        color = when (auditedItem.riskGrade) {
-                                            "A+", "A" -> Color(0xFF2E7D32).copy(alpha = 0.15f)
-                                            "B", "C" -> Color(0xFFF57C00).copy(alpha = 0.15f)
-                                            else -> Color(0xFFD32F2F).copy(alpha = 0.15f)
-                                        }
+                                        color = if (auditedItem.definitiveLeaksCount > 0)
+                                            Color(0xFFD32F2F).copy(alpha = 0.15f)
+                                        else
+                                            Color(0xFF2E7D32).copy(alpha = 0.15f)
                                     ) {
                                         Text(
-                                            text = "Audited: Grade ${auditedItem.riskGrade} • ${auditedItem.definitiveLeaksCount} leaks",
+                                            text = if (auditedItem.definitiveLeaksCount > 0)
+                                                "Analyzed • ${auditedItem.definitiveLeaksCount} leaks found"
+                                            else
+                                                "Analyzed • Clean (0 leaks)",
                                             fontSize = 11.sp,
                                             fontWeight = FontWeight.Bold,
-                                            color = when (auditedItem.riskGrade) {
-                                                "A+", "A" -> Color(0xFF2E7D32)
-                                                "B", "C" -> Color(0xFFE65100)
-                                                else -> Color(0xFFD32F2F)
-                                            },
+                                            color = if (auditedItem.definitiveLeaksCount > 0)
+                                                Color(0xFFD32F2F)
+                                            else
+                                                Color(0xFF2E7D32),
                                             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                                         )
                                     }
@@ -587,7 +588,7 @@ fun AppListScreen(
 }
 
 @Composable
-fun AuditHistoryScreen(
+fun AnalysisHistoryScreen(
     history: List<AuditHistoryItem>,
     onOpenReport: (AuditHistoryItem) -> Unit
 ) {
@@ -607,13 +608,13 @@ fun AuditHistoryScreen(
             )
             Spacer(modifier = Modifier.height(16.dp))
             Text(
-                "No Past Audits Found",
+                "No Analysis History Found",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                "Completed security audits are automatically saved here for instant offline inspection.",
+                "Completed security analyses are automatically saved here for instant offline inspection.",
                 textAlign = TextAlign.Center,
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -631,7 +632,7 @@ fun AuditHistoryScreen(
         ) {
             item {
                 Text(
-                    text = "Past Security Audits (${history.size})",
+                    text = "Analysis History (${history.size})",
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.padding(bottom = 4.dp)
@@ -652,20 +653,19 @@ fun AuditHistoryScreen(
                         modifier = Modifier.padding(16.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // Grade Circle
+                        // Status Icon Box
                         Box(
                             modifier = Modifier
-                                .size(50.dp)
-                                .clip(CircleShape)
-                                .background(if (isCritical) Color(0xFFFFEBEE) else Color(0xFFE8F5E9))
-                                .border(2.dp, if (isCritical) Color(0xFFD32F2F) else Color(0xFF2E7D32), CircleShape),
+                                .size(48.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(if (isCritical) Color(0xFFFFEBEE) else Color(0xFFE8F5E9)),
                             contentAlignment = Alignment.Center
                         ) {
-                            Text(
-                                text = item.riskGrade,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 18.sp,
-                                color = if (isCritical) Color(0xFFD32F2F) else Color(0xFF2E7D32)
+                            Icon(
+                                imageVector = if (isCritical) Icons.Default.Warning else Icons.Default.CheckCircle,
+                                contentDescription = null,
+                                tint = if (isCritical) Color(0xFFD32F2F) else Color(0xFF2E7D32),
+                                modifier = Modifier.size(26.dp)
                             )
                         }
 
@@ -678,7 +678,7 @@ fun AuditHistoryScreen(
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                text = "Leaks: ${item.definitiveLeaksCount} | Score: ${item.riskScore}/10",
+                                text = if (isCritical) "Leaks Detected: ${item.definitiveLeaksCount}" else "Clean - 0 Leaks",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = if (isCritical) Color(0xFFD32F2F) else Color(0xFF2E7D32),
                                 fontWeight = FontWeight.SemiBold
@@ -710,11 +710,10 @@ fun ResultScreen(result: UiState.Result, onBack: () -> Unit) {
     val report = result.report
     val leakCount = report.definitive_leaks_count
     val hasLeaks = leakCount > 0
-    val risk = report.risk_assessment
     var selectedTab by remember { mutableIntStateOf(0) }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        // Executive Summary Banner + Risk Score Meter
+        // Summary Header Card
         Card(
             modifier = Modifier
                 .fillMaxWidth()
@@ -726,29 +725,20 @@ fun ResultScreen(result: UiState.Result, onBack: () -> Unit) {
         ) {
             Column(modifier = Modifier.padding(18.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    // Risk Score & Grade Badge
                     Box(
                         modifier = Modifier
-                            .size(62.dp)
-                            .clip(CircleShape)
+                            .size(54.dp)
+                            .clip(RoundedCornerShape(14.dp))
                             .background(Color.White)
-                            .border(3.dp, if (hasLeaks) Color(0xFFD32F2F) else Color(0xFF2E7D32), CircleShape),
+                            .border(2.dp, if (hasLeaks) Color(0xFFD32F2F) else Color(0xFF2E7D32), RoundedCornerShape(14.dp)),
                         contentAlignment = Alignment.Center
                     ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(
-                                text = risk?.grade ?: (if (hasLeaks) "F" else "A+"),
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 20.sp,
-                                color = if (hasLeaks) Color(0xFFD32F2F) else Color(0xFF2E7D32)
-                            )
-                            Text(
-                                text = "GRADE",
-                                fontSize = 9.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.Gray
-                            )
-                        }
+                        Icon(
+                            imageVector = if (hasLeaks) Icons.Default.Warning else Icons.Default.CheckCircle,
+                            contentDescription = null,
+                            tint = if (hasLeaks) Color(0xFFD32F2F) else Color(0xFF2E7D32),
+                            modifier = Modifier.size(30.dp)
+                        )
                     }
 
                     Spacer(modifier = Modifier.width(14.dp))
@@ -760,35 +750,17 @@ fun ResultScreen(result: UiState.Result, onBack: () -> Unit) {
                             fontWeight = FontWeight.Bold,
                             color = Color.Black
                         )
+                        Spacer(modifier = Modifier.height(2.dp))
                         Text(
                             text = if (hasLeaks) "Definitive Leaks Found: $leakCount" else "Clean - No Leaks Detected",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.SemiBold,
                             color = if (hasLeaks) Color(0xFFD32F2F) else Color(0xFF2E7D32)
                         )
-                        Text(
-                            text = "Risk Score: ${risk?.score ?: (if (hasLeaks) 9.5 else 0.5)} / 10.0  (${risk?.severity ?: (if (hasLeaks) "CRITICAL" else "CLEAN")})",
-                            style = MaterialTheme.typography.bodySmall,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.Black.copy(alpha = 0.7f)
-                        )
                     }
                 }
 
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // Recommendation Guidance
-                Text(
-                    text = "💡 ${risk?.recommendation ?: "Inspect detailed data flow traces below."}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Color.DarkGray,
-                    modifier = Modifier
-                        .background(Color.White.copy(alpha = 0.7f), shape = RoundedCornerShape(8.dp))
-                        .padding(8.dp)
-                        .fillMaxWidth()
-                )
-
-                Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(14.dp))
 
                 // Metadata Chips + Share / PDF Actions
                 Row(

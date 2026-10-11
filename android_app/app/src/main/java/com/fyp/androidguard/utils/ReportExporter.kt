@@ -19,23 +19,16 @@ object ReportExporter {
 
     fun shareReportText(context: Context, appName: String, report: AnalysisReport) {
         val dateStr = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date())
-        val risk = report.risk_assessment
         val engine = report.engine ?: "Static Analysis"
 
         val sb = StringBuilder()
-        sb.appendLine("🛡️ ANDROIDGUARD SECURITY AUDIT REPORT")
+        sb.appendLine("🛡️ ANDROIDGUARD ANALYSIS REPORT")
         sb.appendLine("=========================================")
         sb.appendLine("Application: $appName")
-        sb.appendLine("Audit Date: $dateStr")
+        sb.appendLine("Analysis Date: $dateStr")
         sb.appendLine("Analysis Engine: $engine")
         sb.appendLine("SHA-256 Fingerprint: ${report.sha256 ?: "N/A"}")
-        sb.appendLine()
-        sb.appendLine("📊 RISK ASSESSMENT:")
-        sb.appendLine("• Security Grade: ${risk?.grade ?: "N/A"}")
-        sb.appendLine("• Risk Score: ${risk?.score ?: 0.0} / 10.0")
-        sb.appendLine("• Severity Level: ${risk?.severity ?: "UNKNOWN"}")
-        sb.appendLine("• Definitive Leaks Detected: ${report.definitive_leaks_count}")
-        sb.appendLine("• Recommendation: ${risk?.recommendation ?: "Inspect findings."}")
+        sb.appendLine("Definitive Leaks Detected: ${report.definitive_leaks_count}")
         sb.appendLine()
         sb.appendLine("🚨 KEY LEAK FINDINGS (${report.findings.size} Total):")
         sb.appendLine("-----------------------------------------")
@@ -105,12 +98,11 @@ object ReportExporter {
         }
 
         val dateStr = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date())
-        val risk = report.risk_assessment
 
         var y = 45f
 
         // Document Header
-        canvas.drawText("🛡️ ANDROIDGUARD SECURITY AUDIT REPORT", 36f, y, titlePaint)
+        canvas.drawText("🛡️ ANDROIDGUARD ANALYSIS REPORT", 36f, y, titlePaint)
         y += 18f
         canvas.drawText("Automated Multi-Tier Static Analysis | Generated on: $dateStr", 36f, y, subtitlePaint)
         y += 24f
@@ -123,27 +115,28 @@ object ReportExporter {
         canvas.drawLine(36f, y, 559f, y, linePaint)
         y += 22f
 
-        // Executive Summary Box
+        // Summary Box
         val boxPaint = Paint().apply {
             color = if (report.definitive_leaks_count > 0) Color.rgb(255, 235, 238) else Color.rgb(232, 245, 233)
             style = Paint.Style.FILL
         }
-        canvas.drawRoundRect(36f, y, 559f, y + 105f, 8f, 8f, boxPaint)
+        canvas.drawRoundRect(36f, y, 559f, y + 85f, 8f, 8f, boxPaint)
 
         canvas.drawText("TARGET APPLICATION: $appName", 50f, y + 24f, headerPaint)
         canvas.drawText("Analysis Engine: ${report.engine ?: "Static Analysis"}", 50f, y + 42f, textPaint)
         canvas.drawText("SHA-256: ${report.sha256?.take(36) ?: "N/A"}...", 50f, y + 58f, textPaint)
 
-        // Risk & Grade badge
-        val gradeColor = if (report.definitive_leaks_count > 0) Color.rgb(211, 47, 47) else Color.rgb(46, 125, 50)
-        val gradePaint = Paint().apply {
-            color = gradeColor
+        val leakStatusColor = if (report.definitive_leaks_count > 0) Color.rgb(211, 47, 47) else Color.rgb(46, 125, 50)
+        val leakStatusPaint = Paint().apply {
+            color = leakStatusColor
             textSize = 14f
             typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
         }
-        canvas.drawText("GRADE: ${risk?.grade ?: "N/A"}  |  RISK SCORE: ${risk?.score ?: 0.0} / 10.0  |  SEVERITY: ${risk?.severity ?: "UNKNOWN"}", 50f, y + 78f, gradePaint)
-        canvas.drawText("Definitive Leaks Found: ${report.definitive_leaks_count}", 50f, y + 96f, gradePaint)
-        y += 125f
+        canvas.drawText(
+            if (report.definitive_leaks_count > 0) "Definitive Leaks Found: ${report.definitive_leaks_count}" else "Clean - No Leaks Detected",
+            50f, y + 76f, leakStatusPaint
+        )
+        y += 105f
 
         // Detailed Findings Header
         canvas.drawText("DOCUMENTED VULNERABILITY FLOWS (Sample Excerpts):", 36f, y, headerPaint)
