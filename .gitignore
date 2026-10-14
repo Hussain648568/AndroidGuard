@@ -34,3 +34,12 @@ tools/
 report.json
 *.log
 .env
+runs/
+sootOutput/
+test_calc_report.json
+*.pptx
+screen_*.png
+emulator_*.png
+architecture_*.png
+generate_mid_defense_pptx.py
+
